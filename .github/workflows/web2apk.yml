@@ -96,13 +96,26 @@ jobs:
           curl -L \
             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/octet-stream" \
-            "${{ inputs.icon_url }}" -o assets/icon.png
-          file assets/icon.png
-          if ! file assets/icon.png | grep -qi "PNG image"; then
-            echo "❌ File yang didownload bukan PNG valid (kemungkinan link salah/expired atau butuh auth)."
-            cat assets/icon.png
+            "${{ inputs.icon_url }}" -o assets/icon_raw
+
+          file assets/icon_raw
+          if ! file assets/icon_raw | grep -qiE "PNG image|JPEG image|image data|bitmap"; then
+            echo "❌ File yang didownload bukan file gambar valid (kemungkinan link salah/expired atau butuh auth)."
+            cat assets/icon_raw
             exit 1
           fi
+
+          # Icon dari Telegram hampir selalu JPEG walaupun nama filenya .png
+          # (Telegram kompres foto jadi JPEG). flutter_launcher_icons butuh
+          # PNG asli, jadi paksa convert di sini pakai ImageMagick (sudah
+          # terpasang default di runner ubuntu-latest).
+          convert assets/icon_raw assets/icon.png
+          file assets/icon.png
+          if ! file assets/icon.png | grep -qi "PNG image"; then
+            echo "❌ Gagal convert icon ke PNG."
+            exit 1
+          fi
+          rm -f assets/icon_raw
 
       - name: Add flutter_launcher_icons
         working-directory: webapp
@@ -129,4 +142,3 @@ jobs:
         with:
           name: web2apk-build
           path: webapp/build/app/outputs/flutter-apk/*.apk
-          
