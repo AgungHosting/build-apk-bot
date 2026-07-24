@@ -1,55 +1,64 @@
 name: Web to APK
 
+# Dipicu oleh bot Telegram (github.js -> triggerWeb2ApkWorkflow), dengan input:
+#   web_url  : URL website yang mau dibungkus jadi APK (webview)
+#   app_name : nama aplikasi yang muncul di HP
+#   icon_url : URL gambar icon (idealnya persegi 1:1, misal 512x512)
 on:
   workflow_dispatch:
     inputs:
       web_url:
-        description: "URL website yang mau dijadikan APK"
+        description: "URL website yang mau dibungkus jadi APK"
         required: true
+        type: string
       app_name:
         description: "Nama aplikasi"
-        required: true
+        required: false
+        type: string
+        default: "My WebApp"
       icon_url:
-        description: "URL icon (PNG)"
-        required: true
+        description: "URL icon aplikasi (disarankan 512x512, persegi)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: "stable"
+          flutter-version: "3.35.5"
+          cache: true
 
-      - name: Create Flutter project
-        run: flutter create webapp --org com.webtoapk --platforms=android
+      - name: Buat project Flutter baru
+        run: flutter create webapp --org com.web2apk --project-name webapp
 
-      - name: Add webview_flutter dependency
-        working-directory: webapp
-        run: flutter pub add webview_flutter
-
-      - name: Write main.dart
+      - name: Tambah dependency webview_flutter + flutter_launcher_icons
         working-directory: webapp
         run: |
-          cat > lib/main.dart << 'DARTEOF'
+          flutter pub add webview_flutter
+          flutter pub add --dev flutter_launcher_icons
+
+      - name: Tulis main.dart (WebView wrapper)
+        working-directory: webapp
+        run: |
+          cat > lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           import 'package:webview_flutter/webview_flutter.dart';
 
-          void main() => runApp(const MyApp());
+          void main() => runApp(const WebApp());
 
-          class MyApp extends StatelessWidget {
-            const MyApp({super.key});
+          class WebApp extends StatelessWidget {
+            const WebApp({super.key});
+
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
                 debugShowCheckedModeBanner: false,
+                title: '${{ inputs.app_name }}',
                 home: const WebViewScreen(),
               );
             }
@@ -57,92 +66,79 @@ jobs:
 
           class WebViewScreen extends StatefulWidget {
             const WebViewScreen({super.key});
+
             @override
             State<WebViewScreen> createState() => _WebViewScreenState();
           }
 
           class _WebViewScreenState extends State<WebViewScreen> {
-            late final WebViewController controller;
+            late final WebViewController _controller;
 
             @override
             void initState() {
               super.initState();
-              controller = WebViewController()
+              _controller = WebViewController()
                 ..setJavaScriptMode(JavaScriptMode.unrestricted)
-                ..loadRequest(Uri.parse(const String.fromEnvironment(
-                  'WEB_URL',
-                  defaultValue: 'https://example.com',
-                )));
+                ..loadRequest(Uri.parse('${{ inputs.web_url }}'));
             }
 
             @override
             Widget build(BuildContext context) {
-              return Scaffold(
-                body: SafeArea(child: WebViewWidget(controller: controller)),
+              return SafeArea(
+                child: Scaffold(
+                  body: WebViewWidget(controller: _controller),
+                ),
               );
             }
           }
-          DARTEOF
+          EOF
 
-      - name: Set app label
+      - name: Set nama aplikasi (Android label)
         working-directory: webapp
         run: |
-          sed -i 's/android:label="[^"]*"/android:label="${{ inputs.app_name }}"/' android/app/src/main/AndroidManifest.xml
+          sed -i 's/android:label="webapp"/android:label="${{ inputs.app_name }}"/' \
+            android/app/src/main/AndroidManifest.xml
 
-      - name: Download icon
+      - name: Download icon (kalau ada)
+        if: ${{ inputs.icon_url != '' }}
         working-directory: webapp
         run: |
           mkdir -p assets
-          curl -L \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/octet-stream" \
-            "${{ inputs.icon_url }}" -o assets/icon_raw
+          curl -L "${{ inputs.icon_url }}" -o assets/icon.png
 
-          file assets/icon_raw
-          if ! file assets/icon_raw | grep -qiE "PNG image|JPEG image|image data|bitmap"; then
-            echo "❌ File yang didownload bukan file gambar valid (kemungkinan link salah/expired atau butuh auth)."
-            cat assets/icon_raw
-            exit 1
-          fi
-
-          # Icon dari Telegram hampir selalu JPEG walaupun nama filenya .png
-          # (Telegram kompres foto jadi JPEG). flutter_launcher_icons butuh
-          # PNG asli, jadi paksa convert di sini pakai ImageMagick.
-          # Install eksplisit dulu — jangan asumsi sudah ada di runner,
-          # karena image ubuntu-latest terbaru sudah tidak bawa ImageMagick
-          # secara default (ini yang bikin "convert: command not found").
-          sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
-          convert assets/icon_raw assets/icon.png
-          file assets/icon.png
-          if ! file assets/icon.png | grep -qi "PNG image"; then
-            echo "❌ Gagal convert icon ke PNG."
-            exit 1
-          fi
-          rm -f assets/icon_raw
-
-      - name: Add flutter_launcher_icons
+      - name: Generate launcher icon (kalau ada)
+        if: ${{ inputs.icon_url != '' }}
         working-directory: webapp
         run: |
-          flutter pub add dev:flutter_launcher_icons
-          cat >> pubspec.yaml << 'YAMLEOF'
+          cat >> pubspec.yaml << 'EOF'
 
           flutter_launcher_icons:
             android: true
             ios: false
             image_path: "assets/icon.png"
-          YAMLEOF
+          EOF
+          dart run flutter_launcher_icons
 
-      - name: Generate launcher icons
+      - name: Flutter pub get
         working-directory: webapp
-        run: dart run flutter_launcher_icons
+        run: flutter pub get
 
-      - name: Build APK
+      - name: Build APK (release)
         working-directory: webapp
-        run: flutter build apk --release --dart-define=WEB_URL="${{ inputs.web_url }}"
+        run: flutter build apk --release
 
-      - name: Upload APK artifact
+      - name: Siapkan folder output
+        working-directory: webapp
+        run: |
+          mkdir -p ../apk-output
+          cp build/app/outputs/flutter-apk/app-release.apk ../apk-output/
+
+      # Nama artifact WAJIB mengandung kata "apk" karena index.js mencari
+      # artifact lewat: a.name.toLowerCase().includes("apk")
+      - name: Upload artifact APK
         uses: actions/upload-artifact@v4
         with:
-          name: web2apk-build
-          path: webapp/build/app/outputs/flutter-apk/*.apk
+          name: apk-output
+          path: apk-output/*.apk
+          retention-days: 1
           
