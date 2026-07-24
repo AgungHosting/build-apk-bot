@@ -1,0 +1,132 @@
+name: Web to APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      web_url:
+        description: "URL website yang mau dijadikan APK"
+        required: true
+      app_name:
+        description: "Nama aplikasi"
+        required: true
+      icon_url:
+        description: "URL icon (PNG)"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter project
+        run: flutter create webapp --org com.webtoapk --platforms=android
+
+      - name: Add webview_flutter dependency
+        working-directory: webapp
+        run: flutter pub add webview_flutter
+
+      - name: Write main.dart
+        working-directory: webapp
+        run: |
+          cat > lib/main.dart << 'DARTEOF'
+          import 'package:flutter/material.dart';
+          import 'package:webview_flutter/webview_flutter.dart';
+
+          void main() => runApp(const MyApp());
+
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                home: const WebViewScreen(),
+              );
+            }
+          }
+
+          class WebViewScreen extends StatefulWidget {
+            const WebViewScreen({super.key});
+            @override
+            State<WebViewScreen> createState() => _WebViewScreenState();
+          }
+
+          class _WebViewScreenState extends State<WebViewScreen> {
+            late final WebViewController controller;
+
+            @override
+            void initState() {
+              super.initState();
+              controller = WebViewController()
+                ..setJavaScriptMode(JavaScriptMode.unrestricted)
+                ..loadRequest(Uri.parse(const String.fromEnvironment(
+                  'WEB_URL',
+                  defaultValue: 'https://example.com',
+                )));
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                body: SafeArea(child: WebViewWidget(controller: controller)),
+              );
+            }
+          }
+          DARTEOF
+
+      - name: Set app label
+        working-directory: webapp
+        run: |
+          sed -i 's/android:label="[^"]*"/android:label="${{ inputs.app_name }}"/' android/app/src/main/AndroidManifest.xml
+
+      - name: Download icon
+        working-directory: webapp
+        run: |
+          mkdir -p assets
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            "${{ inputs.icon_url }}" -o assets/icon.png
+          file assets/icon.png
+          if ! file assets/icon.png | grep -qi "PNG image"; then
+            echo "❌ File yang didownload bukan PNG valid (kemungkinan link salah/expired atau butuh auth)."
+            cat assets/icon.png
+            exit 1
+          fi
+
+      - name: Add flutter_launcher_icons
+        working-directory: webapp
+        run: |
+          flutter pub add dev:flutter_launcher_icons
+          cat >> pubspec.yaml << 'YAMLEOF'
+
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icon.png"
+          YAMLEOF
+
+      - name: Generate launcher icons
+        working-directory: webapp
+        run: dart run flutter_launcher_icons
+
+      - name: Build APK
+        working-directory: webapp
+        run: flutter build apk --release --dart-define=WEB_URL="${{ inputs.web_url }}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web2apk-build
+          path: webapp/build/app/outputs/flutter-apk/*.apk
+          
