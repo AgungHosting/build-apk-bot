@@ -1,0 +1,79 @@
+name: Build Flutter APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: "URL zip source code Flutter (dari GitHub Release asset)"
+        required: true
+      tag:
+        description: "Tag/identifier build"
+        required: true
+      build_type:
+        description: "release atau debug"
+        required: true
+        default: "release"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Download source zip
+        run: |
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            "${{ inputs.source_url }}" -o source.zip
+          file source.zip
+          if ! file source.zip | grep -qi "Zip archive"; then
+            echo "❌ File yang didownload bukan file zip valid (kemungkinan link salah/expired atau butuh auth)."
+            head -c 500 source.zip
+            exit 1
+          fi
+
+      - name: Extract source
+        run: |
+          mkdir -p project
+          unzip -q source.zip -d project
+
+      - name: Locate pubspec.yaml
+        id: locate
+        run: |
+          PUBSPEC_DIR=$(dirname "$(find project -maxdepth 4 -name pubspec.yaml | head -n1)")
+          if [ -z "$PUBSPEC_DIR" ] || [ "$PUBSPEC_DIR" = "." ]; then
+            echo "❌ pubspec.yaml tidak ditemukan di dalam zip!"
+            exit 1
+          fi
+          echo "dir=$PUBSPEC_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Flutter pub get
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: flutter pub get
+
+      - name: Build APK (release)
+        if: ${{ inputs.build_type == 'release' }}
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: flutter build apk --release
+
+      - name: Build APK (debug)
+        if: ${{ inputs.build_type == 'debug' }}
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: flutter build apk --debug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-apk-build
+          path: ${{ steps.locate.outputs.dir }}/build/app/outputs/flutter-apk/*.apk
+          
