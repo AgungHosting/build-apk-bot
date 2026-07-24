@@ -1,79 +1,98 @@
-name: Build Flutter APK
+name: Build APK (release)
 
+# Dipicu oleh bot Telegram (github.js -> triggerWorkflow), dengan input:
+#   source_url : URL API asset GitHub Release berisi source code Flutter (.zip)
+#   tag        : nama tag release (dipakai untuk penamaan, opsional)
+#   build_type : "debug" atau "release"
 on:
   workflow_dispatch:
     inputs:
       source_url:
-        description: "URL zip source code Flutter (dari GitHub Release asset)"
+        description: "URL asset (API GitHub) berisi source project .zip"
         required: true
+        type: string
       tag:
-        description: "Tag/identifier build"
-        required: true
+        description: "Tag release"
+        required: false
+        type: string
+        default: ""
       build_type:
-        description: "release atau debug"
-        required: true
+        description: "debug atau release"
+        required: false
+        type: string
         default: "release"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+      - name: Download source zip dari GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          curl -L \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "${{ inputs.source_url }}" \
+            -o source.zip
+          mkdir -p source
+          unzip -q source.zip -d source
+          # Kalau isi zip cuma 1 folder pembungkus, masuk ke situ.
+          if [ "$(ls source | wc -l)" -eq 1 ] && [ -d "source/$(ls source)" ]; then
+            mv "source/$(ls source)"/* source/ 2>/dev/null || true
+          fi
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: "stable"
+          flutter-version: "3.35.5"   # versi terakhir sebelum IconData dijadikan final class (breaking change),
+          cache: true                  # aman untuk font_awesome_flutter versi lama. Naikkan lagi kalau semua
+                                        # dependency sudah dipastikan kompatibel dengan Flutter/Dart terbaru.
 
-      - name: Download source zip
+      - name: Patch dependency yang diketahui bermasalah (jaga-jaga)
+        working-directory: source
         run: |
-          curl -L \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/octet-stream" \
-            "${{ inputs.source_url }}" -o source.zip
-          file source.zip
-          if ! file source.zip | grep -qi "Zip archive"; then
-            echo "❌ File yang didownload bukan file zip valid (kemungkinan link salah/expired atau butuh auth)."
-            head -c 500 source.zip
-            exit 1
+          set -e
+          if grep -q "font_awesome_flutter" pubspec.yaml 2>/dev/null; then
+            echo "Mengunci font_awesome_flutter ke versi yang kompatibel..."
+            # Kalau versi yang tertulis di pubspec.yaml sudah lebih baru / pakai caret, biarkan.
+            # Baris ini hanya jaga-jaga kalau versinya di-pin manual ke versi lama yang bikin error.
+            sed -i -E 's/font_awesome_flutter:\s*\^?10\.[0-9]+\.[0-9]+/font_awesome_flutter: ^10.9.0/' pubspec.yaml || true
           fi
-
-      - name: Extract source
-        run: |
-          mkdir -p project
-          unzip -q source.zip -d project
-
-      - name: Locate pubspec.yaml
-        id: locate
-        run: |
-          PUBSPEC_DIR=$(dirname "$(find project -maxdepth 4 -name pubspec.yaml | head -n1)")
-          if [ -z "$PUBSPEC_DIR" ] || [ "$PUBSPEC_DIR" = "." ]; then
-            echo "❌ pubspec.yaml tidak ditemukan di dalam zip!"
-            exit 1
-          fi
-          echo "dir=$PUBSPEC_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Flutter pub get
-        working-directory: ${{ steps.locate.outputs.dir }}
+        working-directory: source
         run: flutter pub get
-
-      - name: Build APK (release)
-        if: ${{ inputs.build_type == 'release' }}
-        working-directory: ${{ steps.locate.outputs.dir }}
-        run: flutter build apk --release
 
       - name: Build APK (debug)
         if: ${{ inputs.build_type == 'debug' }}
-        working-directory: ${{ steps.locate.outputs.dir }}
+        working-directory: source
         run: flutter build apk --debug
 
-      - name: Upload APK artifact
+      - name: Build APK (release)
+        if: ${{ inputs.build_type != 'debug' }}
+        working-directory: source
+        run: flutter build apk --release
+
+      - name: Siapkan folder output
+        working-directory: source
+        run: |
+          set -e
+          mkdir -p ../apk-output
+          if [ "${{ inputs.build_type }}" = "debug" ]; then
+            cp build/app/outputs/flutter-apk/app-debug.apk ../apk-output/
+          else
+            cp build/app/outputs/flutter-apk/app-release.apk ../apk-output/
+          fi
+
+      # Nama artifact WAJIB mengandung kata "apk" karena index.js mencari
+      # artifact lewat: a.name.toLowerCase().includes("apk")
+      - name: Upload artifact APK
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-apk-build
-          path: ${{ steps.locate.outputs.dir }}/build/app/outputs/flutter-apk/*.apk
+          name: apk-output
+          path: apk-output/*.apk
+          retention-days: 1
           
