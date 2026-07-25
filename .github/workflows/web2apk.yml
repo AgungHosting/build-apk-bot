@@ -104,7 +104,18 @@ jobs:
         working-directory: webapp
         run: |
           mkdir -p assets
-          curl -L "${{ inputs.icon_url }}" -o assets/icon.png
+          curl -L \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            "${{ inputs.icon_url }}" -o assets/icon.png
+
+          # Validasi cepat: pastikan yang ke-download itu benar PNG, bukan
+          # JSON error/metadata (kalau ini gagal, cek lagi icon_url & token).
+          if ! file assets/icon.png | grep -qi "PNG image data"; then
+            echo "❌ File yang ke-download BUKAN gambar PNG yang valid. Isi file:"
+            cat assets/icon.png
+            exit 1
+          fi
 
       - name: Generate launcher icon (kalau ada)
         if: ${{ inputs.icon_url != '' }}
@@ -141,4 +152,3 @@ jobs:
           name: apk-output
           path: apk-output/*.apk
           retention-days: 1
-          
