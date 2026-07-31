@@ -154,7 +154,24 @@ jobs:
 
       - name: Build APK (release)
         working-directory: webapp
-        run: flutter build apk --release
+        run: |
+          set -e
+          # Gradle kadang gagal download dependency karena gangguan jaringan
+          # sesaat di runner ("Gradle threw an error while downloading
+          # artifacts from the network"). Retry otomatis dulu sebelum
+          # benar-benar dianggap gagal.
+          for i in 1 2 3; do
+            echo "Percobaan build ke-$i..."
+            if flutter build apk --release; then
+              break
+            fi
+            if [ "$i" = "3" ]; then
+              echo "Build tetap gagal setelah 3x percobaan."
+              exit 1
+            fi
+            echo "Gagal, tunggu 15 detik lalu coba lagi..."
+            sleep 15
+          done
 
       - name: Siapkan folder output
         working-directory: webapp
