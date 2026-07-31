@@ -1,98 +1,91 @@
-name: Build APK (release)
+# ============================================================
+# File ini WAJIB ditaruh di REPO TEMPLATE FLUTTER kamu
+# pada path: .github/workflows/build.yml
+#
+# Repo template Flutter minimal harus punya:
+# - Project Flutter dengan WebView (webview_flutter) yang
+#   membaca URL dari sebuah file konfigurasi, misalnya:
+#   lib/config.dart -> const String APP_URL = "REPLACE_URL";
+# - Package flutter_launcher_icons untuk ganti ikon otomatis
+# ============================================================
 
-# Dipicu oleh bot Telegram (github.js -> triggerWorkflow), dengan input:
-#   source_url : URL API asset GitHub Release berisi source code Flutter (.zip)
-#   tag        : nama tag release (dipakai untuk penamaan, opsional)
-#   build_type : "debug" atau "release"
+name: Build APK
+
 on:
   workflow_dispatch:
     inputs:
-      source_url:
-        description: "URL asset (API GitHub) berisi source project .zip"
+      build_id:
+        description: "ID unik build (dipakai sebagai tag release)"
         required: true
-        type: string
-      tag:
-        description: "Tag release"
+      app_name:
+        description: "Nama aplikasi"
+        required: true
+      app_url:
+        description: "URL website yang akan ditampilkan"
+        required: true
+      package_name:
+        description: "Application ID / package name"
+        required: true
+      icon_url:
+        description: "Link gambar ikon (opsional)"
         required: false
-        type: string
-        default: ""
-      build_type:
-        description: "debug atau release"
-        required: false
-        type: string
-        default: "release"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Download source zip dari GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          curl -L \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            "${{ inputs.source_url }}" \
-            -o source.zip
-          mkdir -p source
-          unzip -q source.zip -d source
-          # Kalau isi zip cuma 1 folder pembungkus, masuk ke situ.
-          if [ "$(ls source | wc -l)" -eq 1 ] && [ -d "source/$(ls source)" ]; then
-            mv "source/$(ls source)"/* source/ 2>/dev/null || true
-          fi
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: "3.24.0"
           channel: "stable"
-          flutter-version: "3.35.5"   # versi terakhir sebelum IconData dijadikan final class (breaking change),
-          cache: true                  # aman untuk font_awesome_flutter versi lama. Naikkan lagi kalau semua
-                                        # dependency sudah dipastikan kompatibel dengan Flutter/Dart terbaru.
 
-      - name: Patch dependency yang diketahui bermasalah (jaga-jaga)
-        working-directory: source
+      - name: Ganti Nama Aplikasi
         run: |
-          set -e
-          if grep -q "font_awesome_flutter" pubspec.yaml 2>/dev/null; then
-            echo "Mengunci font_awesome_flutter ke versi yang kompatibel..."
-            # Kalau versi yang tertulis di pubspec.yaml sudah lebih baru / pakai caret, biarkan.
-            # Baris ini hanya jaga-jaga kalau versinya di-pin manual ke versi lama yang bikin error.
-            sed -i -E 's/font_awesome_flutter:\s*\^?10\.[0-9]+\.[0-9]+/font_awesome_flutter: ^10.9.0/' pubspec.yaml || true
-          fi
+          sed -i "s/REPLACE_APP_NAME/${{ github.event.inputs.app_name }}/g" android/app/src/main/AndroidManifest.xml
 
-      - name: Flutter pub get
-        working-directory: source
+      - name: Ganti URL Website di Konfigurasi
+        run: |
+          echo "const String APP_URL = \"${{ github.event.inputs.app_url }}\";" > lib/config.dart
+
+      - name: Ganti Package Name (Application ID)
+        run: |
+          sed -i "s/REPLACE_PACKAGE_NAME/${{ github.event.inputs.package_name }}/g" android/app/build.gradle
+
+      - name: Download Ikon Custom (jika ada)
+        if: ${{ github.event.inputs.icon_url != '' }}
+        run: |
+          curl -L "${{ github.event.inputs.icon_url }}" -o assets/icon/icon.png
+
+      - name: Install Dependencies
         run: flutter pub get
 
-      - name: Build APK (debug)
-        if: ${{ inputs.build_type == 'debug' }}
-        working-directory: source
-        run: flutter build apk --debug
+      - name: Generate Ikon Aplikasi
+        if: ${{ github.event.inputs.icon_url != '' }}
+        run: flutter pub run flutter_launcher_icons
 
-      - name: Build APK (release)
-        if: ${{ inputs.build_type != 'debug' }}
-        working-directory: source
+      - name: Build APK Release
         run: flutter build apk --release
 
-      - name: Siapkan folder output
-        working-directory: source
+      - name: Rename APK Output
         run: |
-          set -e
-          mkdir -p ../apk-output
-          if [ "${{ inputs.build_type }}" = "debug" ]; then
-            cp build/app/outputs/flutter-apk/app-debug.apk ../apk-output/
-          else
-            cp build/app/outputs/flutter-apk/app-release.apk ../apk-output/
-          fi
+          mkdir -p output
+          cp build/app/outputs/flutter-apk/app-release.apk output/${{ github.event.inputs.app_name }}.apk
 
-      # Nama artifact WAJIB mengandung kata "apk" karena index.js mencari
-      # artifact lewat: a.name.toLowerCase().includes("apk")
-      - name: Upload artifact APK
-        uses: actions/upload-artifact@v4
+      - name: Buat GitHub Release & Upload APK
+        uses: softprops/action-gh-release@v2
         with:
-          name: apk-output
-          path: apk-output/*.apk
-          retention-days: 1
-          
+          tag_name: ${{ github.event.inputs.build_id }}
+          name: "Build ${{ github.event.inputs.app_name }} (${{ github.event.inputs.build_id }})"
+          files: output/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
