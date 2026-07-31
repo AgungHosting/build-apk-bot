@@ -21,6 +21,11 @@ on:
         required: false
         type: string
         default: ""
+      package_id:
+        description: "ID unik per build (huruf kecil/angka), dipakai sebagai applicationId Android supaya tiap APK dianggap aplikasi terpisah, bukan update dari APK sebelumnya"
+        required: false
+        type: string
+        default: "app"
 
 jobs:
   build:
@@ -33,8 +38,19 @@ jobs:
           flutter-version: "3.35.5"
           cache: true
 
+      # PENTING soal instalasi APK di HP:
+      # Android mengenali aplikasi lewat "applicationId" (com.xxx.yyy),
+      # BUKAN lewat nama aplikasi yang tampil (app_name/android:label).
+      # Kalau applicationId-nya SAMA persis dengan APK yang sudah
+      # ter-install (mis. selalu "com.web2apk.webapp"), maka APK baru
+      # akan dianggap Android sebagai UPDATE dari APK lama -> muncul
+      # tombol "Update" (bukan "Install"), dan APK lama otomatis
+      # tertimpa/hilang walau nama app-nya beda. Makanya org project di
+      # sini WAJIB memuat `package_id` (unik per build, dikirim dari
+      # bot) supaya applicationId tiap Web to APK berbeda-beda, dan
+      # semua APK bisa ter-install berdampingan sebagai aplikasi terpisah.
       - name: Buat project Flutter baru
-        run: flutter create webapp --org com.web2apk --project-name webapp
+        run: flutter create webapp --org com.web2apk.${{ inputs.package_id }} --project-name webapp
 
       - name: Pastikan izin INTERNET ada di release AndroidManifest.xml
         working-directory: webapp
