@@ -1,12 +1,14 @@
 # ============================================================
-# File ini WAJIB ditaruh di REPO TEMPLATE FLUTTER kamu
-# pada path: .github/workflows/build.yml
+# File ini otomatis di-deploy oleh bot ke:
+#   .github/workflows/build.yml
+# di repo GITHUB_USERNAME/GITHUB_REPO (lihat settings.js).
 #
-# Repo template Flutter minimal harus punya:
-# - Project Flutter dengan WebView (webview_flutter) yang
-#   membaca URL dari sebuah file konfigurasi, misalnya:
-#   lib/config.dart -> const String APP_URL = "REPLACE_URL";
-# - Package flutter_launcher_icons untuk ganti ikon otomatis
+# Repo target HANYA perlu berisi source Dart minimal
+# (pubspec.yaml, lib/main.dart, lib/config.dart, assets/icon/icon.png)
+# — juga otomatis di-deploy oleh bot dari folder flutter-template/.
+# Folder platform "android/" TIDAK perlu ada di repo sama sekali;
+# workflow ini yang men-generate-nya setiap kali build jalan,
+# jadi repo template selalu bersih dan tidak perlu di-utak-atik manual.
 # ============================================================
 
 name: Build APK
@@ -49,19 +51,23 @@ jobs:
           flutter-version: "3.24.0"
           channel: "stable"
 
+      - name: Generate Project Android (otomatis, aman diulang)
+        run: flutter create --platforms=android .
+
       - name: Ganti Nama Aplikasi
         run: |
-          sed -i "s/REPLACE_APP_NAME/${{ github.event.inputs.app_name }}/g" android/app/src/main/AndroidManifest.xml
+          sed -i "s/android:label=\"[^\"]*\"/android:label=\"${{ github.event.inputs.app_name }}\"/" android/app/src/main/AndroidManifest.xml
+
+      - name: Ganti Package Name (Application ID)
+        run: |
+          sed -i "s/applicationId \".*\"/applicationId \"${{ github.event.inputs.package_name }}\"/" android/app/build.gradle
+          sed -i "s/namespace \".*\"/namespace \"${{ github.event.inputs.package_name }}\"/" android/app/build.gradle
 
       - name: Ganti URL Website di Konfigurasi
         run: |
           echo "const String APP_URL = \"${{ github.event.inputs.app_url }}\";" > lib/config.dart
 
-      - name: Ganti Package Name (Application ID)
-        run: |
-          sed -i "s/REPLACE_PACKAGE_NAME/${{ github.event.inputs.package_name }}/g" android/app/build.gradle
-
-      - name: Download Ikon Custom (jika ada)
+      - name: Pakai Ikon Custom (jika ada)
         if: ${{ github.event.inputs.icon_url != '' }}
         run: |
           curl -L "${{ github.event.inputs.icon_url }}" -o assets/icon/icon.png
@@ -70,7 +76,6 @@ jobs:
         run: flutter pub get
 
       - name: Generate Ikon Aplikasi
-        if: ${{ github.event.inputs.icon_url != '' }}
         run: flutter pub run flutter_launcher_icons
 
       - name: Build APK Release
@@ -79,7 +84,7 @@ jobs:
       - name: Rename APK Output
         run: |
           mkdir -p output
-          cp build/app/outputs/flutter-apk/app-release.apk output/${{ github.event.inputs.app_name }}.apk
+          cp build/app/outputs/flutter-apk/app-release.apk "output/${{ github.event.inputs.app_name }}.apk"
 
       - name: Buat GitHub Release & Upload APK
         uses: softprops/action-gh-release@v2
