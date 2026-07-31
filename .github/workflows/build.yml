@@ -62,6 +62,21 @@ jobs:
             sed -i -E 's/font_awesome_flutter:\s*\^?10\.[0-9]+\.[0-9]+/font_awesome_flutter: ^10.9.0/' pubspec.yaml || true
           fi
 
+      - name: Pastikan izin INTERNET ada di release AndroidManifest.xml
+        working-directory: source
+        run: |
+          set -e
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          # Manifest release project Flutter (termasuk yang di-upload user)
+          # sering tidak punya izin INTERNET secara eksplisit -- flutter
+          # create hanya menaruhnya di manifest debug/profile. Kalau app
+          # pakai WebView dan izin ini hilang, hasil APK release akan gagal
+          # konek internet (muncul net::ERR_CACHE_MISS) meski URL-nya valid.
+          if [ -f "$MANIFEST" ] && ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i '0,/<manifest /{s|<manifest \(.*\)>|<manifest \1>\n    <uses-permission android:name="android.permission.INTERNET"/>|}' "$MANIFEST"
+            echo "Izin INTERNET ditambahkan ke $MANIFEST"
+          fi
+
       - name: Flutter pub get
         working-directory: source
         run: flutter pub get
@@ -71,10 +86,19 @@ jobs:
         working-directory: source
         run: flutter build apk --debug
 
-      - name: Build APK (release)
+      - name: Build APK (release, split per ABI)
         if: ${{ inputs.build_type != 'debug' }}
         working-directory: source
-        run: flutter build apk --release
+        run: |
+          set -e
+          # --split-per-abi menghasilkan APK terpisah per arsitektur
+          # (armeabi-v7a, arm64-v8a, x86_64) alih-alih 1 APK "universal"
+          # yang menggabungkan semuanya. APK universal gampang tembus 50MB+
+          # kalau project punya banyak plugin/asset besar, dan Telegram Bot
+          # API MENOLAK kirim file di atas 50MB dengan error
+          # "413: Request Entity Too Large". APK arm64-v8a saja sudah
+          # cukup untuk hampir semua HP Android modern dan jauh lebih kecil.
+          flutter build apk --release --split-per-abi
 
       - name: Siapkan folder output
         working-directory: source
@@ -84,8 +108,17 @@ jobs:
           if [ "${{ inputs.build_type }}" = "debug" ]; then
             cp build/app/outputs/flutter-apk/app-debug.apk ../apk-output/
           else
-            cp build/app/outputs/flutter-apk/app-release.apk ../apk-output/
+            # Ambil APK arm64-v8a (cukup untuk hampir semua HP modern &
+            # jauh lebih kecil daripada APK universal). Kalau karena suatu
+            # sebab file itu tidak ada, fallback ke APK apapun yang ada.
+            if [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ]; then
+              cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../apk-output/app-release.apk
+            else
+              cp build/app/outputs/flutter-apk/app-*release*.apk ../apk-output/ 2>/dev/null || \
+              cp build/app/outputs/flutter-apk/app-release.apk ../apk-output/
+            fi
           fi
+          ls -lh ../apk-output/
 
       # Nama artifact WAJIB mengandung kata "apk" karena index.js mencari
       # artifact lewat: a.name.toLowerCase().includes("apk")
