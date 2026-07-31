@@ -36,6 +36,24 @@ jobs:
       - name: Buat project Flutter baru
         run: flutter create webapp --org com.web2apk --project-name webapp
 
+      - name: Pastikan izin INTERNET ada di release AndroidManifest.xml
+        working-directory: webapp
+        run: |
+          set -e
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          # flutter create HANYA menambahkan izin INTERNET ke manifest
+          # debug/profile, BUKAN ke manifest release yang dipakai
+          # `flutter build apk --release`. Tanpa baris ini, APK release
+          # tidak punya akses internet sama sekali dan WebView akan
+          # menampilkan error net::ERR_CACHE_MISS / halaman "web tidak
+          # tersedia" walau URL-nya sendiri valid dan bisa dibuka di browser.
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i '0,/<manifest /{s|<manifest \(.*\)>|<manifest \1>\n    <uses-permission android:name="android.permission.INTERNET"/>|}' "$MANIFEST"
+            echo "Izin INTERNET ditambahkan ke $MANIFEST"
+          else
+            echo "Izin INTERNET sudah ada, skip."
+          fi
+
       - name: Tambah dependency webview_flutter + flutter_launcher_icons
         working-directory: webapp
         run: |
