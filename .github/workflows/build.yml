@@ -84,7 +84,24 @@ jobs:
       - name: Build APK (debug)
         if: ${{ inputs.build_type == 'debug' }}
         working-directory: source
-        run: flutter build apk --debug
+        run: |
+          set -e
+          # Gradle kadang gagal download dependency karena gangguan jaringan
+          # sesaat di runner ("Gradle threw an error while downloading
+          # artifacts from the network"). Ini bukan masalah di project,
+          # jadi di-retry otomatis dulu sebelum benar-benar dianggap gagal.
+          for i in 1 2 3; do
+            echo "Percobaan build debug ke-$i..."
+            if flutter build apk --debug; then
+              break
+            fi
+            if [ "$i" = "3" ]; then
+              echo "Build debug tetap gagal setelah 3x percobaan."
+              exit 1
+            fi
+            echo "Gagal, tunggu 15 detik lalu coba lagi..."
+            sleep 15
+          done
 
       - name: Build APK (release, split per ABI)
         if: ${{ inputs.build_type != 'debug' }}
@@ -103,8 +120,19 @@ jobs:
           # dari APK (dipindah ke folder terpisah, tidak diupload) supaya
           # ukuran APK tidak bengkak oleh debug info yang sebenarnya tidak
           # dibutuhkan untuk instalasi/pemakaian normal.
-          flutter build apk --release --split-per-abi \
-            --split-debug-info=build/symbols --obfuscate
+          for i in 1 2 3; do
+            echo "Percobaan build release ke-$i..."
+            if flutter build apk --release --split-per-abi \
+                --split-debug-info=build/symbols --obfuscate; then
+              break
+            fi
+            if [ "$i" = "3" ]; then
+              echo "Build release tetap gagal setelah 3x percobaan."
+              exit 1
+            fi
+            echo "Gagal, tunggu 15 detik lalu coba lagi..."
+            sleep 15
+          done
 
       - name: Diagnostik ukuran (biar ketahuan kalau APK tiba-tiba membengkak)
         working-directory: source
